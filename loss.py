@@ -83,7 +83,7 @@ class SSIMLoss(nn.Module):
         self.window_size = window_size
         self.size_average = size_average
         self.channel = 1
-        self.window = self.create_window(window_size, self.channel)
+        self.window = None  # Will be created on first use
     
     def gaussian(self, window_size: int, sigma: float) -> torch.Tensor:
         gauss = torch.Tensor([torch.exp(torch.tensor(-(x - window_size//2)**2/float(2*sigma**2))) for x in range(window_size)])
@@ -134,16 +134,12 @@ class SSIMLoss(nn.Module):
         
         (_, channel, _, _) = img1.size()
         
-        if channel == self.channel and self.window.data.type() == img1.data.type():
-            window = self.window
-        else:
-            window = self.create_window(self.window_size, channel)
-            
+        # Create window if needed
+        if self.window is None or self.window.size(0) != channel:
+            self.window = self.create_window(self.window_size, channel)
             if img1.is_cuda:
-                window = window.cuda(img1.get_device())
-            window = window.type_as(img1)
-            
-            self.window = window
+                self.window = self.window.cuda(img1.get_device())
+            self.window = self.window.type_as(img1)
             self.channel = channel
         
         return 1 - self._ssim(img1, img2, window, self.window_size, channel, self.size_average)
