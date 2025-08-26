@@ -142,7 +142,7 @@ class SSIMLoss(nn.Module):
             self.window = self.window.type_as(img1)
             self.channel = channel
         
-        return 1 - self._ssim(img1, img2, window, self.window_size, channel, self.size_average)
+        return 1 - self._ssim(img1, img2, self.window, self.window_size, channel, self.size_average)
 
 class CharbonnierLoss(nn.Module):
     """

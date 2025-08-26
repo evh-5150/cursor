@@ -98,8 +98,8 @@ class SimpleUnet(nn.Module):
         self.mid_block2 = Block(mid_channels, mid_channels, time_emb_dim)
         
         # Upsampling path
-        self.up1 = Block(mid_channels, model_channels * 2, time_emb_dim, up=True)
-        self.up2 = Block(model_channels * 2, model_channels, time_emb_dim, up=True)
+        self.up1 = Block(mid_channels + model_channels * 2, model_channels * 2, time_emb_dim, up=True)
+        self.up2 = Block(model_channels * 2 + model_channels, model_channels, time_emb_dim, up=True)
         self.up3 = Block(model_channels, model_channels, time_emb_dim, up=True)
         
         # Final convolution
@@ -151,12 +151,17 @@ class SimpleUnet(nn.Module):
         x3 = self.dropout(x3)
         
         # Upsampling path with skip connections
-        x = self.up1(torch.cat([x3, x2], dim=1), t)
+        # First upsampling - need to resize x2 to match x3's spatial dimensions
+        x2_resized = F.interpolate(x2, size=x3.shape[2:], mode='bilinear', align_corners=False)
+        x = self.up1(torch.cat([x3, x2_resized], dim=1), t)
         x = self.dropout(x)
         
-        x = self.up2(torch.cat([x, x1], dim=1), t)
+        # Second upsampling - need to resize x1 to match x's spatial dimensions
+        x1_resized = F.interpolate(x1, size=x.shape[2:], mode='bilinear', align_corners=False)
+        x = self.up2(torch.cat([x, x1_resized], dim=1), t)
         x = self.dropout(x)
         
+        # Third upsampling
         x = self.up3(x, t)
         x = self.dropout(x)
         
