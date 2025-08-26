@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from simple_unet import SimpleUnet
+from diffusion_model import SimpleUnet
 from utils import calculate_psnr, calculate_ssim
 import os
 
@@ -50,6 +50,10 @@ def simple_super_resolution(lr_image: torch.Tensor, model: SimpleUnet, device: t
         
         # Forward pass
         sr_image = model(lr_image, timestep, condition)
+        
+        print(f"Debug - Input shape: {lr_image.shape}")
+        print(f"Debug - Output shape: {sr_image.shape}")
+        print(f"Debug - Expected output shape: {lr_image.shape[2] * 4}x{lr_image.shape[3] * 4}")
     
     return sr_image
 
@@ -145,6 +149,11 @@ def main():
     print("Performing super-resolution...")
     sr_image = simple_super_resolution(lr_image, model, device)
     print(f"Super-resolved image shape: {sr_image.shape}")
+    
+    # The super-resolved image should be 4x larger than the low-resolution input
+    expected_size = (lr_image.shape[2] * 4, lr_image.shape[3] * 4)
+    print(f"Expected super-resolved size: {expected_size}")
+    print(f"Actual super-resolved size: {sr_image.shape[2:]}")
     
     # Evaluate results
     print("Evaluating results...")

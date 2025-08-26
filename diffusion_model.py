@@ -20,43 +20,6 @@ class SinusoidalPositionEmbeddings(nn.Module):
         embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
         return embeddings
 
-class Block(nn.Module):
-    """Basic convolutional block with optional residual connection."""
-    
-    def __init__(self, in_ch: int, out_ch: int, time_emb_dim: int, up: bool = False, down: bool = False):
-        super().__init__()
-        self.time_mlp = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(time_emb_dim, out_ch)
-        )
-        
-        if up:
-            self.conv1 = nn.Conv2d(2 * in_ch, out_ch, 3, padding=1)
-            self.transform = nn.ConvTranspose2d(out_ch, out_ch, 4, 2, 1)
-        elif down:
-            self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-            self.transform = nn.Conv2d(out_ch, out_ch, 4, 2, 1)
-        else:
-            self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-            self.transform = nn.Identity()
-        
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.bnorm1 = nn.BatchNorm2d(out_ch)
-        self.bnorm2 = nn.BatchNorm2d(out_ch)
-        self.relu = nn.ReLU()
-    
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        # First conv
-        h = self.bnorm1(self.relu(self.conv1(x)))
-        # Time embedding
-        time_emb = self.relu(self.time_mlp(t))
-        time_emb = time_emb[(..., ) + (None, ) * 2]
-        h = h + time_emb
-        # Second conv
-        h = self.bnorm2(self.relu(self.conv2(h)))
-        # Down or up sample
-        return self.transform(h)
-
 class SimpleUnet(nn.Module):
     """
     Simple U-Net architecture for diffusion-based super-resolution.
@@ -88,29 +51,80 @@ class SimpleUnet(nn.Module):
         self.condition_conv = nn.Conv2d(in_channels, model_channels, kernel_size=3, padding=1)
         
         # Downsampling path
-        self.down1 = Block(model_channels, model_channels, time_emb_dim, down=True)
-        self.down2 = Block(model_channels, model_channels * 2, time_emb_dim, down=True)
-        self.down3 = Block(model_channels * 2, model_channels * 4, time_emb_dim, down=True)
+        self.down1 = nn.Sequential(
+            nn.Conv2d(model_channels, model_channels, 3, padding=1),
+            nn.BatchNorm2d(model_channels),
+            nn.ReLU(),
+            nn.Conv2d(model_channels, model_channels, 4, stride=2, padding=1),
+            nn.BatchNorm2d(model_channels),
+            nn.ReLU(),
+        )
+        
+        self.down2 = nn.Sequential(
+            nn.Conv2d(model_channels, model_channels * 2, 3, padding=1),
+            nn.BatchNorm2d(model_channels * 2),
+            nn.ReLU(),
+            nn.Conv2d(model_channels * 2, model_channels * 2, 4, stride=2, padding=1),
+            nn.BatchNorm2d(model_channels * 2),
+            nn.ReLU(),
+        )
+        
+        self.down3 = nn.Sequential(
+            nn.Conv2d(model_channels * 2, model_channels * 4, 3, padding=1),
+            nn.BatchNorm2d(model_channels * 4),
+            nn.ReLU(),
+            nn.Conv2d(model_channels * 4, model_channels * 4, 4, stride=2, padding=1),
+            nn.BatchNorm2d(model_channels * 4),
+            nn.ReLU(),
+        )
         
         # Middle
-        mid_channels = model_channels * 4
-        self.mid_block1 = Block(mid_channels, mid_channels, time_emb_dim)
-        self.mid_block2 = Block(mid_channels, mid_channels, time_emb_dim)
+        self.mid_block1 = nn.Sequential(
+            nn.Conv2d(model_channels * 4, model_channels * 4, 3, padding=1),
+            nn.BatchNorm2d(model_channels * 4),
+            nn.ReLU(),
+        )
+        
+        self.mid_block2 = nn.Sequential(
+            nn.Conv2d(model_channels * 4, model_channels * 4, 3, padding=1),
+            nn.BatchNorm2d(model_channels * 4),
+            nn.ReLU(),
+        )
         
         # Upsampling path
-        self.up1 = Block(mid_channels + model_channels * 2, model_channels * 2, time_emb_dim, up=True)
-        self.up2 = Block(model_channels * 2 + model_channels, model_channels, time_emb_dim, up=True)
-        self.up3 = Block(model_channels, model_channels, time_emb_dim, up=True)
+        self.up1 = nn.Sequential(
+            nn.ConvTranspose2d(model_channels * 4, model_channels * 2, 4, stride=2, padding=1),
+            nn.BatchNorm2d(model_channels * 2),
+            nn.ReLU(),
+            nn.Conv2d(model_channels * 2, model_channels * 2, 3, padding=1),
+            nn.BatchNorm2d(model_channels * 2),
+            nn.ReLU(),
+        )
+        
+        self.up2 = nn.Sequential(
+            nn.ConvTranspose2d(model_channels * 2, model_channels, 4, stride=2, padding=1),
+            nn.BatchNorm2d(model_channels),
+            nn.ReLU(),
+            nn.Conv2d(model_channels, model_channels, 3, padding=1),
+            nn.BatchNorm2d(model_channels),
+            nn.ReLU(),
+        )
         
         # Final convolution
         self.final_conv = nn.Sequential(
+            nn.Conv2d(model_channels, model_channels, 3, padding=1),
             nn.BatchNorm2d(model_channels),
             nn.ReLU(),
-            nn.Conv2d(model_channels, out_channels, kernel_size=3, padding=1)
+            nn.Conv2d(model_channels, out_channels, 3, padding=1)
         )
         
         # Dropout
         self.dropout = nn.Dropout(dropout_rate)
+        
+        # Time projection layers
+        self.time_proj1 = nn.Linear(time_emb_dim, model_channels)
+        self.time_proj2 = nn.Linear(time_emb_dim, model_channels * 2)
+        self.time_proj3 = nn.Linear(time_emb_dim, model_channels * 4)
     
     def forward(self, x: torch.Tensor, timestep: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
         """
@@ -124,6 +138,9 @@ class SimpleUnet(nn.Module):
         Returns:
             Predicted noise tensor of shape (B, 1, H, W)
         """
+        # Store original input size
+        original_size = x.shape[2:]
+        
         # Time embedding
         t = self.time_mlp(timestep)
         
@@ -135,34 +152,32 @@ class SimpleUnet(nn.Module):
         x = x + condition
         
         # Downsampling path
-        x1 = self.down1(x, t)
+        x1 = self.down1(x)
         x1 = self.dropout(x1)
         
-        x2 = self.down2(x1, t)
+        x2 = self.down2(x1)
         x2 = self.dropout(x2)
         
-        x3 = self.down3(x2, t)
+        x3 = self.down3(x2)
         x3 = self.dropout(x3)
         
         # Middle
-        x3 = self.mid_block1(x3, t)
+        x3 = self.mid_block1(x3)
         x3 = self.dropout(x3)
-        x3 = self.mid_block2(x3, t)
+        x3 = self.mid_block2(x3)
         x3 = self.dropout(x3)
         
-        # Upsampling path with skip connections
-        # First upsampling - need to resize x2 to match x3's spatial dimensions
-        x2_resized = F.interpolate(x2, size=x3.shape[2:], mode='bilinear', align_corners=False)
-        x = self.up1(torch.cat([x3, x2_resized], dim=1), t)
+        # Upsampling path
+        x = self.up1(x3)
         x = self.dropout(x)
         
-        # Second upsampling - need to resize x1 to match x's spatial dimensions
-        x1_resized = F.interpolate(x1, size=x.shape[2:], mode='bilinear', align_corners=False)
-        x = self.up2(torch.cat([x, x1_resized], dim=1), t)
+        x = self.up2(x)
         x = self.dropout(x)
         
-        # Third upsampling
-        x = self.up3(x, t)
+        # Final upsampling to match target high-resolution size
+        # For super-resolution, we want to output at 4x the input size
+        target_size = (original_size[0] * 4, original_size[1] * 4)
+        x = F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
         x = self.dropout(x)
         
         # Final convolution
